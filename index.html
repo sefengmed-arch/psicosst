@@ -1825,11 +1825,12 @@ function screenSettings(){
     var normEmp=S.normEmpresa||"";
 
     var empMap={};
-    S.evals.forEach(function(e){var v=(e.empresa||"(vazio)").trim();empMap[v]=(empMap[v]||0)+1;});
+    S.evals.forEach(function(e){if(e.arquivado)return;var v=(e.empresa||"(vazio)").trim();empMap[v]=(empMap[v]||0)+1;});
     _empVals=Object.keys(empMap).sort(function(a,b){return empMap[b]-empMap[a]||a.localeCompare(b);});
 
     var vm={};
     S.evals.forEach(function(e){
+      if(e.arquivado)return;
       if(field==="setor"&&normEmp&&(e.empresa||"(vazio)").trim()!==normEmp)return;
       var v=(e[field]||"(vazio)").trim();vm[v]=(vm[v]||0)+1;
     });
