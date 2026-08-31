@@ -202,9 +202,11 @@ var SLB=["Nunca","Raramente","Às vezes","Frequente","Sempre"];
 /* ══ STATE ═════════════════════════════════════════════ */
 var S={
   screen:"home",
-  info:{empresa:"",setor:"",cargo:"",nomeColaborador:""},urlPrefilled:{empresa:false,setor:false},
+  info:{empresa:"",setor:"",cargo:"",nomeColaborador:"",empresaId:"",setorId:"",cargoId:""},urlPrefilled:{empresa:false,setor:false,cargo:false},
   answers:{},page:0,
   evals:[],selKey:null,
+  catalogo:{empresas:{},setores:{},cargos:{}},catalogoLoaded:false,pendingCatalogoResolve:false,
+  cadSelEmpresa:"",cadSelSetor:"",cadNovoEmpresa:"",cadNovoSetor:"",cadNovoCargo:"",cadMsg:"",
   filterEmpresas:[],filterSetores:[],filterCargo:"",search:"",filterDataInicio:"",filterDataFim:"",normField:"empresa",normSelected:[],normCanonical:"",normMsg:"",normEmpresa:"",
   panelTab:"lista",detailTab:"resultados",
   inventory:"",loadingInv:false,
@@ -616,6 +618,20 @@ function setInfo(k,v){
   var btn=document.getElementById("btn-iniciar"),msg=document.getElementById("msg-campos");
   if(btn)btn.disabled=!ok;if(msg)msg.style.display=ok?"none":"block";
 }
+/* ── Seleção de Setor/Cargo via cadastro (cascata a partir da empresa do QR) ── */
+function setInfoSetorSelect(setorId){
+  var i=S.info;i.setorId=setorId;
+  var st=setorId?(S.catalogo.setores[i.empresaId]||{})[setorId]:null;
+  i.setor=st?st.nome:"";
+  i.cargoId="";i.cargo="";
+  render();
+}
+function setInfoCargoSelect(cargoId){
+  var i=S.info;i.cargoId=cargoId;
+  var cg=cargoId?((S.catalogo.cargos[i.empresaId]||{})[i.setorId]||{})[cargoId]:null;
+  i.cargo=cg?cg.nome:"";
+  render();
+}
 function setLgpd(v){
   S.lgpdAceite=v;
   var ok=(S.info.empresa||"").trim()&&(S.info.setor||"").trim()&&(S.info.cargo||"").trim()&&v;
@@ -650,7 +666,7 @@ function loadEvals(){
 function submitEval(){
   S.screen="submitting";render();
   var results=computeResults(S.answers);
-  var data={timestamp:Date.now(),data:new Date().toLocaleDateString("pt-BR"),hora:new Date().toLocaleTimeString("pt-BR"),empresa:S.info.empresa||"",setor:S.info.setor||"",cargo:S.info.cargo||"",nomeColaborador:S.info.nomeColaborador||"",answers:S.answers,results:results,lgpd:{aceite:true,ts:Date.now(),versao:LGPD_POLICY_VERSION,identificado:!!(S.info.nomeColaborador||"").trim()}};
+  var data={timestamp:Date.now(),data:new Date().toLocaleDateString("pt-BR"),hora:new Date().toLocaleTimeString("pt-BR"),empresa:S.info.empresa||"",setor:S.info.setor||"",cargo:S.info.cargo||"",empresaId:S.info.empresaId||"",setorId:S.info.setorId||"",cargoId:S.info.cargoId||"",nomeColaborador:S.info.nomeColaborador||"",answers:S.answers,results:results,lgpd:{aceite:true,ts:Date.now(),versao:LGPD_POLICY_VERSION,identificado:!!(S.info.nomeColaborador||"").trim()}};
   if(!DB){alert("Sem conexão com Firebase.");S.screen="questionnaire";render();return;}
   DB.ref("avaliacoes").push(data).then(function(){sendNotification(data);S.screen="done";render();}).catch(function(e){alert("Erro ao enviar: "+e.message);S.screen="questionnaire";render();});
 }
@@ -915,12 +931,38 @@ function screenInfo(){
     +'<p style="color:#64748b;font-size:14px;margin-bottom:20px">Preencha os campos obrigatórios <span style="color:#ef4444">*</span> antes de iniciar.</p>'
     +'<div class="card">'
     +[{k:"nomeColaborador",lb:"Seu Nome",ph:"Nome completo (opcional)",req:false},{k:"empresa",lb:"Empresa",ph:"Nome da empresa",req:true},{k:"setor",lb:"Setor / Departamento",ph:"Ex.: Produção, Administrativo…",req:true},{k:"cargo",lb:"Seu Cargo / Função",ph:"Ex.: Operador, Atendente, Técnico…",req:true}].map(function(f){
-      return'<div style="margin-bottom:14px">'
-        +'<label style="display:block;font-size:13px;font-weight:500;margin-bottom:5px;color:'+(f.req?'#e2e8f0':'#94a3b8')+'">'
+      var label='<label style="display:block;font-size:13px;font-weight:500;margin-bottom:5px;color:'+(f.req?'#e2e8f0':'#94a3b8')+'">'
         +f.lb+(f.req?' <span style="color:#ef4444">*</span>':' <span style="color:#475569;font-size:11px">(opcional)</span>')
-        +'</label>'
-        +(S.urlPrefilled[f.k]?'<input class="inp" placeholder="'+f.ph+'" value="'+(i[f.k]||"")+"\" readonly style=\"background:#f1f5f9;color:#64748b;cursor:default\" />":'<input class="inp" placeholder="'+f.ph+'" value="'+(i[f.k]||"")+'" oninput="setInfo(\''+f.k+'\',this.value)"/>')
-        +'</div>';
+        +'</label>';
+      var field;
+      if(i.empresaId&&f.k==="setor"){
+        if(S.urlPrefilled.setor){
+          field='<input class="inp" placeholder="'+f.ph+'" value="'+(i.setor||"")+"\" readonly style=\"background:#f1f5f9;color:#64748b;cursor:default\" />";
+        } else {
+          var setoresCad=catSetoresAtivos(i.empresaId);
+          field='<select class="inp" onchange="setInfoSetorSelect(this.value)">'
+            +'<option value="">Selecione o setor…</option>'
+            +setoresCad.map(function(s){return'<option value="'+s.id+'"'+(i.setorId===s.id?' selected':'')+'>'+escapeHtml(s.nome)+'</option>';}).join('')
+            +'</select>'
+            +(!setoresCad.length?'<p style="color:#f59e0b;font-size:11px;margin-top:5px">⚠ Nenhum setor cadastrado para esta empresa ainda.</p>':'');
+        }
+      } else if(i.empresaId&&f.k==="cargo"){
+        if(S.urlPrefilled.cargo){
+          field='<input class="inp" placeholder="'+f.ph+'" value="'+(i.cargo||"")+"\" readonly style=\"background:#f1f5f9;color:#64748b;cursor:default\" />";
+        } else if(!i.setorId){
+          field='<select class="inp" disabled><option>Selecione o setor primeiro…</option></select>';
+        } else {
+          var cargosCad=catCargosAtivos(i.empresaId,i.setorId);
+          field='<select class="inp" onchange="setInfoCargoSelect(this.value)">'
+            +'<option value="">Selecione sua função…</option>'
+            +cargosCad.map(function(c){return'<option value="'+c.id+'"'+(i.cargoId===c.id?' selected':'')+'>'+escapeHtml(c.nome)+'</option>';}).join('')
+            +'</select>'
+            +(!cargosCad.length?'<p style="color:#f59e0b;font-size:11px;margin-top:5px">⚠ Nenhuma função cadastrada para este setor ainda.</p>':'');
+        }
+      } else {
+        field=(S.urlPrefilled[f.k]?'<input class="inp" placeholder="'+f.ph+'" value="'+(i[f.k]||"")+"\" readonly style=\"background:#f1f5f9;color:#64748b;cursor:default\" />":'<input class="inp" placeholder="'+f.ph+'" value="'+(i[f.k]||"")+'" oninput="setInfo(\''+f.k+'\',this.value)"/>');
+      }
+      return'<div style="margin-bottom:14px">'+label+field+'</div>';
     }).join('')
     +'<div style="background:rgba(59,130,246,0.05);border:1px solid rgba(59,130,246,0.2);border-radius:10px;padding:16px;margin:16px 0">'
     +'<p style="font-size:13px;color:#64748b;line-height:1.6;margin-bottom:10px">🔒 <strong style="color:#1e293b">Privacidade e LGPD</strong><br>'
@@ -1278,6 +1320,121 @@ function salvarCadastro(){
 /* ── Encode/decode de email para chave Firebase ── */
 function emailKey(e){return e.toLowerCase().replace(/\./g,'_dot_').replace(/@/g,'_at_');}
 
+/* ── Verificação de admin (gate do módulo de Cadastros) ── */
+function isAdmin(){return !!(S.authUser&&S.avaliadores.some(function(a){return a.email===S.authUser.email&&a.admin;}));}
+
+/* ── Slug legível (uso em URL/exibição; a chave real do Firebase é o push-id) ── */
+function slugify(s){return(s||"").toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");}
+
+/* ══ CATÁLOGO: Empresas → Setores → Cargos ═══════════════
+   Cadastro real (com ID estável), independente do texto livre
+   já existente em avaliacoes/*.empresa|setor|cargo. Leitura é
+   pública (necessária para resolver o link do QR antes do login
+   do colaborador); escrita é restrita a admin nas regras do banco. */
+function loadCatalogo(cb){
+  if(!DB){S.catalogoLoaded=true;if(cb)cb();return;}
+  DB.ref('catalogo').once('value',function(snap){
+    var d=snap.val()||{};
+    S.catalogo={empresas:d.empresas||{},setores:d.setores||{},cargos:d.cargos||{}};
+    S.catalogoLoaded=true;
+    if(S.pendingCatalogoResolve)resolveUrlEmpresa();
+    if(cb)cb();
+  },function(){S.catalogoLoaded=true;if(cb)cb();});
+}
+function catEmpresasAtivas(){
+  var d=S.catalogo.empresas||{},out=[];
+  Object.keys(d).forEach(function(id){if(d[id].ativo!==false)out.push({id:id,nome:d[id].nome});});
+  return out.sort(function(a,b){return a.nome.localeCompare(b.nome);});
+}
+function catSetoresAtivos(empresaId){
+  var d=(S.catalogo.setores||{})[empresaId]||{},out=[];
+  Object.keys(d).forEach(function(id){if(d[id].ativo!==false)out.push({id:id,nome:d[id].nome});});
+  return out.sort(function(a,b){return a.nome.localeCompare(b.nome);});
+}
+function catCargosAtivos(empresaId,setorId){
+  var d=((S.catalogo.cargos||{})[empresaId]||{})[setorId]||{},out=[];
+  Object.keys(d).forEach(function(id){if(d[id].ativo!==false)out.push({id:id,nome:d[id].nome});});
+  return out.sort(function(a,b){return a.nome.localeCompare(b.nome);});
+}
+/* ── Variantes "todas" (inclui inativas) para a tela de administração do Cadastro ── */
+function catEmpresasTodas(){
+  var d=S.catalogo.empresas||{},out=[];
+  Object.keys(d).forEach(function(id){out.push({id:id,nome:d[id].nome,ativo:d[id].ativo!==false});});
+  return out.sort(function(a,b){return a.nome.localeCompare(b.nome);});
+}
+function catSetoresTodos(empresaId){
+  var d=(S.catalogo.setores||{})[empresaId]||{},out=[];
+  Object.keys(d).forEach(function(id){out.push({id:id,nome:d[id].nome,ativo:d[id].ativo!==false});});
+  return out.sort(function(a,b){return a.nome.localeCompare(b.nome);});
+}
+function catCargosTodos(empresaId,setorId){
+  var d=((S.catalogo.cargos||{})[empresaId]||{})[setorId]||{},out=[];
+  Object.keys(d).forEach(function(id){out.push({id:id,nome:d[id].nome,ativo:d[id].ativo!==false});});
+  return out.sort(function(a,b){return a.nome.localeCompare(b.nome);});
+}
+
+/* ── CRUD: Empresas ── */
+function addEmpresa(){
+  var nome=(S.cadNovoEmpresa||'').trim();
+  if(!nome){S.cadMsg='erro:Informe o nome da empresa.';render();return;}
+  if(!DB){S.cadMsg='erro:Sem conexão com Firebase.';render();return;}
+  DB.ref('catalogo/empresas').push({nome:nome,slug:slugify(nome),ativo:true,criadoEm:Date.now()},function(err){
+    if(err){S.cadMsg='erro:'+err.message;}else{S.cadNovoEmpresa='';S.cadMsg='ok:Empresa cadastrada.';}
+    loadCatalogo(function(){render();});
+  });
+}
+function toggleEmpresaAtivo(id){
+  if(!DB)return;var e=S.catalogo.empresas[id];if(!e)return;
+  DB.ref('catalogo/empresas/'+id+'/ativo').set(e.ativo===false,function(){loadCatalogo(function(){render();});});
+}
+function cadSelecionarEmpresa(id){S.cadSelEmpresa=id;S.cadSelSetor='';S.cadNovoSetor='';S.cadNovoCargo='';S.cadMsg='';render();}
+
+/* ── CRUD: Setores (por empresa) ── */
+function addSetor(){
+  var empresaId=S.cadSelEmpresa,nome=(S.cadNovoSetor||'').trim();
+  if(!empresaId){S.cadMsg='erro:Selecione uma empresa.';render();return;}
+  if(!nome){S.cadMsg='erro:Informe o nome do setor.';render();return;}
+  if(!DB){S.cadMsg='erro:Sem conexão com Firebase.';render();return;}
+  DB.ref('catalogo/setores/'+empresaId).push({nome:nome,ativo:true,criadoEm:Date.now()},function(err){
+    if(err){S.cadMsg='erro:'+err.message;}else{S.cadNovoSetor='';S.cadMsg='ok:Setor cadastrado.';}
+    loadCatalogo(function(){render();});
+  });
+}
+function toggleSetorAtivo(empresaId,setorId){
+  if(!DB)return;var s=(S.catalogo.setores[empresaId]||{})[setorId];if(!s)return;
+  DB.ref('catalogo/setores/'+empresaId+'/'+setorId+'/ativo').set(s.ativo===false,function(){loadCatalogo(function(){render();});});
+}
+function cadSelecionarSetor(id){S.cadSelSetor=id;S.cadNovoCargo='';S.cadMsg='';render();}
+
+/* ── CRUD: Cargos (por empresa + setor) ── */
+function addCargo(){
+  var empresaId=S.cadSelEmpresa,setorId=S.cadSelSetor,nome=(S.cadNovoCargo||'').trim();
+  if(!empresaId||!setorId){S.cadMsg='erro:Selecione empresa e setor.';render();return;}
+  if(!nome){S.cadMsg='erro:Informe o nome do cargo.';render();return;}
+  if(!DB){S.cadMsg='erro:Sem conexão com Firebase.';render();return;}
+  DB.ref('catalogo/cargos/'+empresaId+'/'+setorId).push({nome:nome,ativo:true,criadoEm:Date.now()},function(err){
+    if(err){S.cadMsg='erro:'+err.message;}else{S.cadNovoCargo='';S.cadMsg='ok:Cargo cadastrado.';}
+    loadCatalogo(function(){render();});
+  });
+}
+function toggleCargoAtivo(empresaId,setorId,cargoId){
+  if(!DB)return;var c=(((S.catalogo.cargos[empresaId]||{})[setorId])||{})[cargoId];if(!c)return;
+  DB.ref('catalogo/cargos/'+empresaId+'/'+setorId+'/'+cargoId+'/ativo').set(c.ativo===false,function(){loadCatalogo(function(){render();});});
+}
+
+/* ── Resolve nomes de empresa/setor/cargo pré-selecionados via QR assim que o catálogo carrega ── */
+function resolveUrlEmpresa(){
+  var i=S.info;
+  if(i.empresaId&&S.catalogo.empresas[i.empresaId]){
+    var emp=S.catalogo.empresas[i.empresaId];
+    i.empresa=emp.nome;
+    if(i.setorId){var st=(S.catalogo.setores[i.empresaId]||{})[i.setorId];if(st)i.setor=st.nome;}
+    if(i.setorId&&i.cargoId){var cg=((S.catalogo.cargos[i.empresaId]||{})[i.setorId]||{})[i.cargoId];if(cg)i.cargo=cg.nome;}
+  }
+  S.pendingCatalogoResolve=false;
+  render();
+}
+
 /* ── Carregar lista de avaliadores autorizados ── */
 function loadAvaliadores(cb){
   if(!DB)return;
@@ -1379,17 +1536,19 @@ function renderEditModal(){
 
 var S_qrModal=null;
 function abrirQRModal(){
-  var empresas=uniq('empresa');
-  S_qrModal={empresa:empresas[0]||'',setor:'',copied:false};
+  var empresas=catEmpresasAtivas();
+  S_qrModal={empresaId:empresas[0]?empresas[0].id:'',setorId:'',cargoId:'',copied:false};
   render();}
-function qrSetEmpresa(v){if(S_qrModal)S_qrModal.empresa=v;render();}
-function qrSetSetor(v){if(S_qrModal)S_qrModal.setor=v;render();}
+function qrSetEmpresa(v){if(S_qrModal){S_qrModal.empresaId=v;S_qrModal.setorId='';S_qrModal.cargoId='';}render();}
+function qrSetSetor(v){if(S_qrModal){S_qrModal.setorId=v;S_qrModal.cargoId='';}render();}
+function qrSetCargo(v){if(S_qrModal)S_qrModal.cargoId=v;render();}
 function getQRUrl(){
   if(!S_qrModal)return '';
   var base=window.location.origin+window.location.pathname;
   var p=[];
-  if(S_qrModal.empresa)p.push('e='+encodeURIComponent(S_qrModal.empresa));
-  if(S_qrModal.setor)p.push('s='+encodeURIComponent(S_qrModal.setor));
+  if(S_qrModal.empresaId)p.push('emp='+encodeURIComponent(S_qrModal.empresaId));
+  if(S_qrModal.setorId)p.push('set='+encodeURIComponent(S_qrModal.setorId));
+  if(S_qrModal.cargoId)p.push('car='+encodeURIComponent(S_qrModal.cargoId));
   return base+(p.length?'?'+p.join('&'):'');}
 function copiarLink(){
   var url=getQRUrl();
@@ -1397,8 +1556,9 @@ function copiarLink(){
   else{var t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);S_qrModal.copied=true;render();setTimeout(function(){if(S_qrModal)S_qrModal.copied=false;render();},2000);}}
 function renderQRModal(){
   var m=S_qrModal;
-  var empresas=uniq('empresa');
-  var setores=m.empresa?uniqCascade('setor',[m.empresa],[]):uniq('setor');
+  var empresas=catEmpresasAtivas();
+  var setores=m.empresaId?catSetoresAtivos(m.empresaId):[];
+  var cargos=(m.empresaId&&m.setorId)?catCargosAtivos(m.empresaId,m.setorId):[];
   var url=getQRUrl();
   var qrSrc='https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=10&data='+encodeURIComponent(url);
   return'<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center">'
@@ -1408,18 +1568,25 @@ function renderQRModal(){
     +'<h3 style="margin:0;font-size:15pt;color:#0f172a">Gerar Link / QR Code</h3>'
     +'<button onclick="S_qrModal=null;render()" style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;color:#94a3b8">×</button>'
     +'</div>'
+    +(!empresas.length?'<div class="info-box" style="margin-bottom:16px;font-size:13px;color:#64748b">Nenhuma empresa cadastrada ainda. Cadastre em <strong>Config → 🏢 Cadastros</strong> antes de gerar um QR vinculado.</div>':'')
     +'<div style="margin-bottom:12px">'
     +'<label style="display:block;font-size:12px;font-weight:600;color:#64748b;margin-bottom:5px">EMPRESA</label>'
     +'<select class="inp" onchange="qrSetEmpresa(this.value)" style="font-size:13px">'
-    +'<option value="">— Sem filtro (link geral) —</option>'
-    +empresas.map(function(e){return'<option value="'+escapeHtml(e)+'"'+(m.empresa===e?' selected':'')+'>'+escapeHtml(e)+'</option>';}).join('')
+    +'<option value="">— Sem empresa (link geral, texto livre) —</option>'
+    +empresas.map(function(e){return'<option value="'+e.id+'"'+(m.empresaId===e.id?' selected':'')+'>'+escapeHtml(e.nome)+'</option>';}).join('')
     +'</select></div>'
-    +'<div style="margin-bottom:20px">'
-    +'<label style="display:block;font-size:12px;font-weight:600;color:#64748b;margin-bottom:5px">SETOR / GHE</label>'
+    +(m.empresaId?'<div style="margin-bottom:12px">'
+    +'<label style="display:block;font-size:12px;font-weight:600;color:#64748b;margin-bottom:5px">SETOR / GHE <span style="font-weight:400;color:#94a3b8">(opcional — deixe em branco para o colaborador escolher)</span></label>'
     +'<select class="inp" onchange="qrSetSetor(this.value)" style="font-size:13px">'
-    +'<option value="">— Sem filtro —</option>'
-    +setores.map(function(s){return'<option value="'+escapeHtml(s)+'"'+(m.setor===s?' selected':'')+'>'+escapeHtml(s)+'</option>';}).join('')
-    +'</select></div>'
+    +'<option value="">— Sem filtro (colaborador escolhe) —</option>'
+    +setores.map(function(s){return'<option value="'+s.id+'"'+(m.setorId===s.id?' selected':'')+'>'+escapeHtml(s.nome)+'</option>';}).join('')
+    +'</select></div>':'')
+    +(m.empresaId&&m.setorId?'<div style="margin-bottom:20px">'
+    +'<label style="display:block;font-size:12px;font-weight:600;color:#64748b;margin-bottom:5px">CARGO / FUNÇÃO <span style="font-weight:400;color:#94a3b8">(opcional)</span></label>'
+    +'<select class="inp" onchange="qrSetCargo(this.value)" style="font-size:13px">'
+    +'<option value="">— Sem filtro (colaborador escolhe) —</option>'
+    +cargos.map(function(c){return'<option value="'+c.id+'"'+(m.cargoId===c.id?' selected':'')+'>'+escapeHtml(c.nome)+'</option>';}).join('')
+    +'</select></div>':'')
     +'<div style="text-align:center;margin-bottom:16px">'
     +'<img src="'+qrSrc+'" width="180" height="180" style="border-radius:10px;border:1px solid #e2e8f0" alt="QR Code"/>'
     +'</div>'
@@ -1725,10 +1892,58 @@ function screenSettings(){
           }).join('')+'</div>'
         :'<p style="color:#64748b;font-size:13px">Nenhum avaliador cadastrado.</p>')
       +'<div style="display:flex;gap:8px;margin-top:8px">'
-      +'<input id="novoAval" class="inp" placeholder="novo@email.com" style="flex:1;font-size:13px"/>'
-      +'<button class="btn-p" style="white-space:nowrap" onclick="addAvaliador(document.getElementById(\'novoAval\').value)">+ Adicionar</button>'
+      +'<input id="novoAval" class="inp" placeholder="novo@email.com" style="flex:1;font-size:13px" value="'+escapeHtml(S.newAvalEmail||'')+'" oninput="S.newAvalEmail=this.value"/>'
+      +'<button class="btn-p" style="white-space:nowrap" onclick="addAvaliador()">+ Adicionar</button>'
       +'</div>'
       +'</div>';
+  }
+
+  var tabCadastros='';
+  if(tab==="cadastros"&&isAdmin()){
+    var empresasAdm=catEmpresasTodas();
+    var setoresAdm=S.cadSelEmpresa?catSetoresTodos(S.cadSelEmpresa):[];
+    var cargosAdm=(S.cadSelEmpresa&&S.cadSelSetor)?catCargosTodos(S.cadSelEmpresa,S.cadSelSetor):[];
+    var empresaSelNome=(S.catalogo.empresas[S.cadSelEmpresa]||{}).nome||'';
+    var setorSelNome=((S.catalogo.setores[S.cadSelEmpresa]||{})[S.cadSelSetor]||{}).nome||'';
+    var msgBox=S.cadMsg?'<div style="margin-bottom:12px;padding:10px 14px;border-radius:6px;font-size:13px;font-weight:500;background:'+(S.cadMsg.indexOf('ok:')===0?'rgba(34,197,94,0.1);color:#16a34a':'rgba(239,68,68,0.08);color:#dc2626')+'">'+escapeHtml(S.cadMsg.replace(/^(ok|erro):/,''))+'</div>':'';
+    tabCadastros='<div class="card"><h3>🏢 Empresas cadastradas</h3>'
+      +'<p style="color:#64748b;font-size:13px;margin-bottom:14px">Cada empresa cadastrada aqui gera um QR Code próprio (aba 🔗 Link/QR) que já leva o colaborador direto para o formulário com a empresa preenchida, e os setores/cargos abaixo em cascata.</p>'
+      +msgBox
+      +(empresasAdm.length?'<div style="margin-bottom:14px">'+empresasAdm.map(function(e){
+          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:'+(S.cadSelEmpresa===e.id?'#eff6ff':'#f8fafc')+';border:1px solid '+(S.cadSelEmpresa===e.id?'#93c5fd':'#e2e8f0')+';border-radius:6px;margin-bottom:6px;cursor:pointer" onclick="cadSelecionarEmpresa(\''+e.id+'\')">'
+            +'<span style="font-size:13px;color:'+(e.ativo?'#1e293b':'#94a3b8')+'">'+escapeHtml(e.nome)+(e.ativo?'':' <span style="font-size:11px">(inativa)</span>')+'</span>'
+            +'<button class="btn-s" style="font-size:11px;padding:3px 10px" onclick="event.stopPropagation();toggleEmpresaAtivo(\''+e.id+'\')">'+(e.ativo?'Desativar':'Reativar')+'</button>'
+            +'</div>';
+        }).join('')+'</div>'
+        :'<p style="color:#64748b;font-size:13px;margin-bottom:14px">Nenhuma empresa cadastrada ainda.</p>')
+      +'<div style="display:flex;gap:8px">'
+      +'<input id="cadNovaEmpresa" class="inp" placeholder="Nome da nova empresa" style="flex:1;font-size:13px" value="'+escapeHtml(S.cadNovoEmpresa||'')+'" oninput="S.cadNovoEmpresa=this.value"/>'
+      +'<button class="btn-p" style="white-space:nowrap" onclick="addEmpresa()">+ Empresa</button>'
+      +'</div></div>'
+      +(S.cadSelEmpresa?'<div class="card"><h3>🗂 Setores de '+escapeHtml(empresaSelNome)+'</h3>'
+        +(setoresAdm.length?'<div style="margin-bottom:14px">'+setoresAdm.map(function(s){
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:'+(S.cadSelSetor===s.id?'#eff6ff':'#f8fafc')+';border:1px solid '+(S.cadSelSetor===s.id?'#93c5fd':'#e2e8f0')+';border-radius:6px;margin-bottom:6px;cursor:pointer" onclick="cadSelecionarSetor(\''+s.id+'\')">'
+              +'<span style="font-size:13px;color:'+(s.ativo?'#1e293b':'#94a3b8')+'">'+escapeHtml(s.nome)+(s.ativo?'':' <span style="font-size:11px">(inativo)</span>')+'</span>'
+              +'<button class="btn-s" style="font-size:11px;padding:3px 10px" onclick="event.stopPropagation();toggleSetorAtivo(\''+S.cadSelEmpresa+'\',\''+s.id+'\')">'+(s.ativo?'Desativar':'Reativar')+'</button>'
+              +'</div>';
+          }).join('')+'</div>'
+          :'<p style="color:#64748b;font-size:13px;margin-bottom:14px">Nenhum setor cadastrado ainda nesta empresa.</p>')
+        +'<div style="display:flex;gap:8px">'
+        +'<input id="cadNovoSetorInp" class="inp" placeholder="Nome do novo setor" style="flex:1;font-size:13px" value="'+escapeHtml(S.cadNovoSetor||'')+'" oninput="S.cadNovoSetor=this.value"/>'
+        +'<button class="btn-p" style="white-space:nowrap" onclick="addSetor()">+ Setor</button>'
+        +'</div></div>':'')
+      +(S.cadSelEmpresa&&S.cadSelSetor?'<div class="card"><h3>👷 Cargos de '+escapeHtml(setorSelNome)+'</h3>'
+        +(cargosAdm.length?'<div style="margin-bottom:14px">'+cargosAdm.map(function(c){
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:6px">'
+              +'<span style="font-size:13px;color:'+(c.ativo?'#1e293b':'#94a3b8')+'">'+escapeHtml(c.nome)+(c.ativo?'':' <span style="font-size:11px">(inativo)</span>')+'</span>'
+              +'<button class="btn-s" style="font-size:11px;padding:3px 10px" onclick="toggleCargoAtivo(\''+S.cadSelEmpresa+'\',\''+S.cadSelSetor+'\',\''+c.id+'\')">'+(c.ativo?'Desativar':'Reativar')+'</button>'
+              +'</div>';
+          }).join('')+'</div>'
+          :'<p style="color:#64748b;font-size:13px;margin-bottom:14px">Nenhum cargo cadastrado ainda neste setor.</p>')
+        +'<div style="display:flex;gap:8px">'
+        +'<input id="cadNovoCargoInp" class="inp" placeholder="Nome do novo cargo/função" style="flex:1;font-size:13px" value="'+escapeHtml(S.cadNovoCargo||'')+'" oninput="S.cadNovoCargo=this.value"/>'
+        +'<button class="btn-p" style="white-space:nowrap" onclick="addCargo()">+ Cargo</button>'
+        +'</div></div>':'');
   }
 
   return'<div>'
@@ -1737,10 +1952,12 @@ function screenSettings(){
     +'<div style="display:flex;gap:6px;margin:12px 0 20px;flex-wrap:wrap">'
       +'<button class="'+(tab!=="norm"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'config\';render()">⚙ Geral</button>'
       +'<button class="'+(tab==="norm"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'norm\';S.normSelected=[];S.normMsg=\'\';render()">🔧 Normalizar Dados</button>'+'<button class="'+(tab==="aval"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'aval\';S.avalMsg=\'\';loadAvaliadores(function(){render();});" >👥 Avaliadores</button>'
+      +(isAdmin()?'<button class="'+(tab==="cadastros"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'cadastros\';S.cadMsg=\'\';loadCatalogo(function(){render();});" >🏢 Cadastros</button>':'')
     +'</div>'
     +tabGeral
     +tabNorm
     +tabAval
+    +tabCadastros
     +'</div></div>';
 }
 
@@ -1844,15 +2061,30 @@ document.addEventListener("DOMContentLoaded",function(){
   });
 
 
-  /* ── Leitura de parâmetros da URL (?e=EMPRESA&s=SETOR) ── */
+  /* ── Leitura de parâmetros da URL ──
+     Fluxo novo (QR do catálogo cadastrado): ?emp=ID[&set=ID][&car=ID]
+     Fluxo legado (texto livre, mantido como exceção fora do QR de empresa cadastrada): ?e=EMPRESA&s=SETOR */
   try{
     var _qp=new URLSearchParams(window.location.search);
-    var _e=_qp.get('e')||_qp.get('empresa')||'';
-    var _s=_qp.get('s')||_qp.get('setor')||'';
-    if(_e)S.info.empresa=decodeURIComponent(_e.replace(/\+/g,' '));
-    if(_s)S.info.setor=decodeURIComponent(_s.replace(/\+/g,' '));
-    S.urlPrefilled={empresa:!!_e,setor:!!_s};
-  }catch(e){S.urlPrefilled={empresa:false,setor:false};}
+    var _emp=_qp.get('emp')||'';
+    var _set=_qp.get('set')||'';
+    var _car=_qp.get('car')||'';
+    if(_emp){
+      S.info.empresaId=_emp;S.info.setorId=_set||"";S.info.cargoId=_car||"";
+      S.urlPrefilled={empresa:true,setor:!!_set,cargo:!!_car};
+      if(S.catalogoLoaded)resolveUrlEmpresa();else S.pendingCatalogoResolve=true;
+    } else {
+      var _e=_qp.get('e')||_qp.get('empresa')||'';
+      var _s=_qp.get('s')||_qp.get('setor')||'';
+      if(_e)S.info.empresa=decodeURIComponent(_e.replace(/\+/g,' '));
+      if(_s)S.info.setor=decodeURIComponent(_s.replace(/\+/g,' '));
+      S.urlPrefilled={empresa:!!_e,setor:!!_s,cargo:false};
+    }
+  }catch(e){S.urlPrefilled={empresa:false,setor:false,cargo:false};}
+
+  /* Catálogo é público para leitura — carrega sempre, com ou sem login,
+     para resolver o link do QR mesmo antes de qualquer autenticação. */
+  try{loadCatalogo(function(){});}catch(e){}
 
   /* ── Auth state ── */
   firebase.auth().onAuthStateChanged(function(user){
