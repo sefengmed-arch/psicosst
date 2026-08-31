@@ -205,7 +205,7 @@ var S={
   info:{empresa:"",setor:"",cargo:"",nomeColaborador:"",empresaId:"",setorId:"",cargoId:""},urlPrefilled:{empresa:false,setor:false,cargo:false},
   answers:{},page:0,
   evals:[],selKey:null,
-  catalogo:{empresas:{},setores:{},cargos:{}},catalogoLoaded:false,pendingCatalogoResolve:false,
+  catalogo:{empresas:{},setores:{},cargos:{}},catalogoLoaded:false,catalogoErro:false,pendingCatalogoResolve:false,
   cadSelEmpresa:"",cadSelSetor:"",cadNovoEmpresa:"",cadNovoSetor:"",cadNovoCargo:"",cadMsg:"",
   filterEmpresas:[],filterSetores:[],filterCargo:"",search:"",filterDataInicio:"",filterDataFim:"",normField:"empresa",normSelected:[],normCanonical:"",normMsg:"",normEmpresa:"",
   panelTab:"lista",detailTab:"resultados",
@@ -923,6 +923,20 @@ function screenJaRespondeu(){
 
 function screenInfo(){
   var i=S.info;
+  if(i.empresaId&&!S.catalogoLoaded){
+    return'<div class="wrap-sm"><div class="card" style="text-align:center;padding:40px 24px">'
+      +'<div style="font-size:32px;margin-bottom:12px">⏳</div>'
+      +'<p style="color:#64748b;font-size:14px">Carregando dados da empresa…</p>'
+      +'</div></div>';
+  }
+  if(i.empresaId&&S.catalogoLoaded&&!S.catalogo.empresas[i.empresaId]){
+    return'<div class="wrap-sm"><div class="card" style="text-align:center;padding:40px 24px">'
+      +'<div style="font-size:40px;margin-bottom:14px">⚠️</div>'
+      +'<h2 style="margin-bottom:10px">Não foi possível carregar os dados desta empresa</h2>'
+      +'<p style="color:#64748b;font-size:14px;line-height:1.6;margin-bottom:22px">'+(S.catalogoErro?'Verifique sua conexão com a internet e tente novamente.':'Este link pode estar desatualizado ou a empresa foi removida do cadastro.')+' Se o problema continuar, contate o responsável na sua empresa.</p>'
+      +'<button class="btn-p" onclick="window.location.reload()">🔄 Tentar novamente</button>'
+      +'</div></div>';
+  }
   var ok=(i.empresa||"").trim()&&(i.setor||"").trim()&&(i.cargo||"").trim()&&S.lgpdAceite;
   return'<div class="wrap-sm">'
     +'<button class="btn-s" style="margin-bottom:20px" onclick="goHome()">← Voltar</button>'
@@ -1332,14 +1346,20 @@ function slugify(s){return(s||"").toString().toLowerCase().normalize("NFD").repl
    pública (necessária para resolver o link do QR antes do login
    do colaborador); escrita é restrita a admin nas regras do banco. */
 function loadCatalogo(cb){
-  if(!DB){S.catalogoLoaded=true;if(cb)cb();return;}
+  if(!DB){S.catalogoLoaded=true;S.catalogoErro=true;if(S.pendingCatalogoResolve){S.pendingCatalogoResolve=false;render();}if(cb)cb();return;}
   DB.ref('catalogo').once('value',function(snap){
     var d=snap.val()||{};
     S.catalogo={empresas:d.empresas||{},setores:d.setores||{},cargos:d.cargos||{}};
-    S.catalogoLoaded=true;
+    S.catalogoLoaded=true;S.catalogoErro=false;
     if(S.pendingCatalogoResolve)resolveUrlEmpresa();
     if(cb)cb();
-  },function(){S.catalogoLoaded=true;if(cb)cb();});
+  },function(){
+    /* Leitura falhou (ex.: regra do banco bloqueando leitura anônima) — não deixa a tela travada
+       "carregando" para sempre; libera o render para mostrar um erro claro ao colaborador. */
+    S.catalogoLoaded=true;S.catalogoErro=true;
+    if(S.pendingCatalogoResolve){S.pendingCatalogoResolve=false;render();}
+    if(cb)cb();
+  });
 }
 function catEmpresasAtivas(){
   var d=S.catalogo.empresas||{},out=[];
@@ -1773,7 +1793,7 @@ function screenSettings(){
   var c=S.cfg,r=S.cfgReport;
   var tab=S.settingsTab||"config";
 
-  var tabGeral=(tab!=="norm")
+  var tabGeral=(tab==="config")
     ?'<div class="card"><h3>👤 Dados do Responsável Técnico</h3>'
       +'<p style="color:#64748b;font-size:13px;margin-bottom:16px">Aparecem em todos os relatórios PDF e planilha Excel PGR.</p>'
       +'<div class="grid2">'
