@@ -210,6 +210,7 @@ var S={
   cadEmpDados:{cnpj:"",cidade:"",endereco:"",telefone:""},cadEmpDadosMsg:"",
   filterEmpresas:[],filterSetores:[],filterCargo:"",search:"",filterDataInicio:"",filterDataFim:"",normField:"empresa",normSelected:[],normCanonical:"",normMsg:"",normEmpresa:"",
   panelTab:"lista",detailTab:"resultados",
+  controleEmpresa:"",
   inventory:"",loadingInv:false,
   apiKey:(function(){try{return localStorage.getItem(LS_APIKEY)||"";}catch(e){return "";}}()),
   loginErr:false,loginErrMsg:"",loginLoading:false,authUser:null,
@@ -262,6 +263,16 @@ function getFiltered(){
   });
 }
 function uniq(key){var seen={},out=[];S.evals.forEach(function(e){if(e.arquivado)return;var v=e[key]||"";if(v&&!seen[v]){seen[v]=1;out.push(v);}});return out.sort();}
+/* Empresas de TODAS as avaliações (ativas + arquivadas) — usado no Controle de Envios,
+   onde o objetivo é justamente localizar quem já respondeu, independente do ciclo. */
+function uniqAllEmpresas(){
+  var seen={},out=[];
+  S.evals.forEach(function(e){
+    var v=(e.empresa||"").trim();
+    if(v&&!seen[v]){seen[v]=1;out.push(v);}
+  });
+  return out.sort(function(a,b){return a.localeCompare(b,"pt-BR");});
+}
 function uniqCascade(key,empFilter,setFilter){
   var seen={},out=[];
   S.evals.forEach(function(e){
@@ -790,6 +801,44 @@ function doLogout(){
 function getHazardSource(id){var s={1:"Comportamentos abusivos ou violência psicológica",2:"Processos de mudança sem comunicação prévia",3:"Ausência de descrição clara de cargos",4:"Falta de reconhecimento e remuneração inadequada",5:"Suporte insuficiente da chefia e/ou colegas",6:"Excesso de controle e ausência de participação",7:"Critérios de avaliação percebidos como injustos",8:"Exposição a ameaças, agressões ou violência",9:"Volume de trabalho abaixo da capacidade",10:"Volume excessivo de trabalho e prazos inadequados",11:"Conflitos interpessoais e clima organizacional hostil",12:"Falhas nos canais de comunicação interna",13:"Trabalho em regime remoto ou local isolado"};return s[id]||"";}
 function exportExcelIndividual(){var ev=S.evals.find(function(e){return e.key===S.selKey;});if(!ev)return;buildPGR([ev],"PGR_"+(ev.nomeColaborador||"colab").replace(/\s+/g,"_")+".xls",false);}
 function exportExcelConsolidated(){var f=getFiltered();if(!f.length){alert("Nenhuma avaliação.");return;}buildPGR(f,"PGR_Consolidado_"+new Date().toLocaleDateString("pt-BR").replace(/\//g,"-")+".xls",true);}
+
+/* ══ CONTROLE DE ENVIOS ═════════════════════════════════
+   Relatório gerencial: escolhe uma empresa e lista todos os
+   colaboradores que já responderam (ativos + arquivados). */
+function controleRegistros(empresa){
+  return S.evals.filter(function(e){return(e.empresa||"").trim()===empresa;})
+    .slice()
+    .sort(function(a,b){return(a.nomeColaborador||"").localeCompare(b.nomeColaborador||"","pt-BR");});
+}
+function exportControleEnvios(){
+  var emp=S.controleEmpresa;
+  if(!emp){alert("Selecione uma empresa.");return;}
+  var registros=controleRegistros(emp);
+  if(!registros.length){alert("Nenhuma resposta registrada para esta empresa.");return;}
+  var TH='style="color:#ffffff;font-weight:bold;font-size:10pt;padding:7px 8px;border:1px solid #1e3a5f;background:#1d4ed8;text-align:center"';
+  var TD='style="padding:6px 8px;border:1px solid #e2e8f0;font-size:10pt"';
+  var h='<html xmlns:o="urn:schemas-microsoft-com:office:office"><head><meta charset="UTF-8"></head><body>';
+  h+='<table border="1" cellspacing="0" cellpadding="5" style="font-family:Arial;font-size:10pt;border-collapse:collapse">';
+  h+='<tr><td colspan="6" style="font-size:14pt;font-weight:bold;padding:12px;text-align:center">Controle de Envios — '+escapeHtml(emp)+'</td></tr>';
+  h+='<tr><td colspan="6" style="font-size:9pt;color:#475569;text-align:center;padding:6px">Gerado em '+new Date().toLocaleString("pt-BR")+' · Total de respostas: '+registros.length+'</td></tr>';
+  h+='<tr>'+["Nome","Setor","Cargo","Data","Hora","Status"].map(function(c){return'<td '+TH+'>'+c+'</td>';}).join('')+'</tr>';
+  registros.forEach(function(e){
+    h+='<tr>'
+      +'<td '+TD+'>'+escapeHtml(e.nomeColaborador||"")+'</td>'
+      +'<td '+TD+'>'+escapeHtml(e.setor||"")+'</td>'
+      +'<td '+TD+'>'+escapeHtml(e.cargo||"")+'</td>'
+      +'<td '+TD+'>'+escapeHtml(e.data||"")+'</td>'
+      +'<td '+TD+'>'+escapeHtml(e.hora||"")+'</td>'
+      +'<td '+TD+'>'+(e.arquivado?"Arquivado":"Ativo")+'</td>'
+      +'</tr>';
+  });
+  h+='</table></body></html>';
+  var blob=new Blob([h],{type:"application/vnd.ms-excel;charset=utf-8"});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement("a");a.href=url;a.download="Controle_Envios_"+slugify(emp)+".xls";
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 function buildPGR(evals,fname,isConsolidated){
   var COLS=15;
   var d=isConsolidated?new Date().toLocaleDateString("pt-BR"):(evals[0].data||new Date().toLocaleDateString("pt-BR"));
@@ -1168,6 +1217,7 @@ function screenPanel(){
     +'<div class="panel-nav">'
     +'<button class="nav-btn'+(S.panelTab==="lista"?" active":"")+'" onclick="setPanelTab(\'lista\')">📋 Avaliações'+(newCount>0?' <span class="new-badge">'+newCount+'</span>':'')+' </button>'
     +'<button class="nav-btn'+(S.panelTab==="dashboard"?" active":"")+'" onclick="setPanelTab(\'dashboard\')">📊 Dashboard</button>'
+    +'<button class="nav-btn'+(S.panelTab==="controle"?" active":"")+'" onclick="setPanelTab(\'controle\')">📤 Controle de Envios</button>'
     +'<button class="nav-btn" onclick="goConsolidated()">👥 GHE</button>'
     +(function(){var n=S.evals.filter(function(e){return e.arquivado;}).length;return'<button class="nav-btn" onclick="S.archiveView=true;render()">📦 Arquivo'+(n?' ('+n+')':'')+'</button>';}())+'<button class="nav-btn" onclick="abrirQRModal()">🔗 Link/QR</button>'+'<button class="nav-btn" onclick="goSettings()">⚙️ Config</button>'
     +'<button class="nav-btn" onclick="doLogout()" style="color:#ef4444">✕ Sair</button>'
@@ -1265,6 +1315,63 @@ function screenPanel(){
     }
     h+='</div>';
   }
+
+  if(S.panelTab==="controle"){
+    var empresasControle=uniqAllEmpresas();
+    var selEmp=S.controleEmpresa||"";
+    var registrosControle=selEmp?controleRegistros(selEmp):[];
+    var totalReg=registrosControle.length;
+    var ativosReg=registrosControle.filter(function(e){return!e.arquivado;}).length;
+    var arquivReg=totalReg-ativosReg;
+    var datasReg=registrosControle.map(function(e){return e.timestamp;}).filter(Boolean);
+    var primeiraReg=datasReg.length?new Date(Math.min.apply(null,datasReg)):null;
+    var ultimaReg=datasReg.length?new Date(Math.max.apply(null,datasReg)):null;
+
+    h+='<h2 style="margin-bottom:6px">📤 Controle de Envios</h2>'
+      +'<p style="color:#64748b;font-size:13px;margin-bottom:18px">Selecione uma empresa para ver, com nome, setor, cargo e data, quem já respondeu à avaliação (inclui ciclos arquivados).</p>';
+
+    h+='<div class="card" style="margin-bottom:18px">'
+      +'<label style="display:block;color:#64748b;font-size:12px;font-weight:500;margin-bottom:6px">Empresa</label>'
+      +'<select class="sel" style="width:100%;max-width:480px" onchange="S.controleEmpresa=this.value;render()">'
+      +'<option value="">Selecione uma empresa…</option>'
+      +empresasControle.map(function(v){return'<option value="'+escapeHtml(v)+'"'+(v===selEmp?' selected':'')+'>'+escapeHtml(v)+'</option>';}).join('')
+      +'</select>'
+      +'</div>';
+
+    if(!selEmp){
+      h+='<div class="empty-state"><div class="icon">🏢</div><h3>Selecione uma empresa acima para gerar o relatório</h3></div>';
+    } else {
+      h+='<div class="stat-grid" style="margin-bottom:12px">'
+        +'<div class="stat-card"><div class="stat-val" style="color:#3b82f6">'+totalReg+'</div><div class="stat-lbl">Total de Respostas</div></div>'
+        +'<div class="stat-card"><div class="stat-val" style="color:#22C55E">'+ativosReg+'</div><div class="stat-lbl">Ciclo Ativo</div></div>'
+        +'<div class="stat-card"><div class="stat-val" style="color:#64748b">'+arquivReg+'</div><div class="stat-lbl">Arquivadas</div></div>'
+        +'</div>';
+      if(primeiraReg){
+        h+='<p style="color:#64748b;font-size:12px;margin-bottom:16px">Período: '+primeiraReg.toLocaleDateString("pt-BR")+' a '+ultimaReg.toLocaleDateString("pt-BR")+'</p>';
+      }
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">'
+        +'<h3 style="margin:0">Colaboradores que já responderam</h3>'
+        +(totalReg?'<button class="btn-g" onclick="exportControleEnvios()" style="padding:7px 14px;font-size:13px">⬇ Exportar Excel</button>':'')
+        +'</div>';
+      if(!totalReg){
+        h+='<div class="empty-state"><div class="icon">📭</div><h3>Nenhuma resposta registrada para esta empresa</h3></div>';
+      } else {
+        h+='<div class="card" style="padding:0;overflow:auto"><table><thead><tr><th>Nome</th><th>Setor</th><th>Cargo</th><th>Data</th><th>Hora</th><th>Status</th></tr></thead><tbody>'
+          +registrosControle.map(function(e){
+            return'<tr'+(e.arquivado?' style="opacity:0.6"':'')+'>'
+              +'<td>'+escapeHtml(e.nomeColaborador||"—")+'</td>'
+              +'<td>'+escapeHtml(e.setor||"—")+'</td>'
+              +'<td>'+escapeHtml(e.cargo||"—")+'</td>'
+              +'<td class="mono">'+escapeHtml(e.data||"—")+'</td>'
+              +'<td class="mono">'+escapeHtml(e.hora||"—")+'</td>'
+              +'<td>'+(e.arquivado?'<span style="color:#64748b">📦 Arquivado</span>':'<span style="color:#22C55E">✅ Ativo</span>')+'</td>'
+              +'</tr>';
+          }).join('')
+          +'</tbody></table></div>';
+      }
+    }
+  }
+
   h+='</div>';
   if(S.archiveModal)h+=renderArchiveModal();
   if(S.editModal)h+=renderEditModal();
