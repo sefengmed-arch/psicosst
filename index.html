@@ -207,6 +207,7 @@ var S={
   evals:[],selKey:null,
   catalogo:{empresas:{},setores:{},cargos:{}},catalogoLoaded:false,catalogoErro:false,pendingCatalogoResolve:false,
   cadSelEmpresa:"",cadSelSetor:"",cadNovoEmpresa:"",cadNovoSetor:"",cadNovoCargo:"",cadMsg:"",
+  cadEmpDados:{cnpj:"",cidade:"",endereco:"",telefone:""},cadEmpDadosMsg:"",
   filterEmpresas:[],filterSetores:[],filterCargo:"",search:"",filterDataInicio:"",filterDataFim:"",normField:"empresa",normSelected:[],normCanonical:"",normMsg:"",normEmpresa:"",
   panelTab:"lista",detailTab:"resultados",
   inventory:"",loadingInv:false,
@@ -367,10 +368,56 @@ h+='<tr><td><strong>'+r.name+'</strong><div style="font-size:8.5pt;color:#6b7280
   h+='<div class="footer">'+(endereco?endereco+' &nbsp;|&nbsp; ':'')+( telefone?'Tel: '+telefone+' &nbsp;|&nbsp; ':'')+'Gerado por PsicoSST — NR-1 · Port. MTE 1.419/2024</div></div></body></html>';
   return h;
 }
+/* ══ Dados de relatório: por empresa (catálogo) + período automático ══ */
+function findCatalogEmpresaForEvals(evals){
+  if(!evals||!evals.length)return null;
+  var idSet={},idCount=0,nameSet={},nameCount=0;
+  evals.forEach(function(e){
+    if(e.empresaId){if(!idSet[e.empresaId]){idSet[e.empresaId]=1;idCount++;}}
+    else{var n=(e.empresa||'').trim().toLowerCase();if(n&&!nameSet[n]){nameSet[n]=1;nameCount++;}}
+  });
+  var idKeys=Object.keys(idSet);
+  if(idKeys.length===1&&nameCount===0){
+    var emp=(S.catalogo.empresas||{})[idKeys[0]];
+    if(!emp)return null;
+    return{id:idKeys[0],nome:emp.nome,cnpj:emp.cnpj||'',cidade:emp.cidade||'',endereco:emp.endereco||'',telefone:emp.telefone||''};
+  }
+  if(idKeys.length===0&&nameCount===1){
+    var targetName=Object.keys(nameSet)[0],found=null;
+    Object.keys(S.catalogo.empresas||{}).forEach(function(id){
+      var e2=S.catalogo.empresas[id];
+      if(e2&&(e2.nome||'').trim().toLowerCase()===targetName)found={id:id,nome:e2.nome,cnpj:e2.cnpj||'',cidade:e2.cidade||'',endereco:e2.endereco||'',telefone:e2.telefone||''};
+    });
+    return found;
+  }
+  return null; /* mais de uma empresa distinta no conjunto — não há uma única para aplicar */
+}
+function computePeriodoColeta(evals){
+  var ts=[];
+  (evals||[]).forEach(function(e){if(e.timestamp)ts.push(e.timestamp);});
+  if(!ts.length)return{inicio:'',fim:''};
+  var min=Math.min.apply(null,ts),max=Math.max.apply(null,ts);
+  return{inicio:new Date(min).toLocaleDateString('pt-BR'),fim:new Date(max).toLocaleDateString('pt-BR')};
+}
+function getCfgReportEfetivo(evals){
+  var base=S.cfgReport||{};
+  var out={responsavel:base.responsavel||'',registro:base.registro||'',cnpj:base.cnpj||'',cidade:base.cidade||'',endereco:base.endereco||'',telefone:base.telefone||'',totalElegiveis:base.totalElegiveis||''};
+  var emp=findCatalogEmpresaForEvals(evals);
+  if(emp){
+    if(emp.cnpj)out.cnpj=emp.cnpj;
+    if(emp.cidade)out.cidade=emp.cidade;
+    if(emp.endereco)out.endereco=emp.endereco;
+    if(emp.telefone)out.telefone=emp.telefone;
+  }
+  var per=computePeriodoColeta(evals);
+  out.dataColetaInicio=per.inicio||base.dataColetaInicio||'';
+  out.dataColetaFim=per.fim||base.dataColetaFim||'';
+  return out;
+}
 function openReport(){
   var ev=S.evals.find(function(e){return e.key===S.selKey;});if(!ev)return;
   var w=window.open('','_blank');
-  if(w){w.document.write(buildReportHTML(ev,S.cfgReport));w.document.close();setTimeout(function(){w.print();},800);}
+  if(w){w.document.write(buildReportHTML(ev,getCfgReportEfetivo([ev])));w.document.close();setTimeout(function(){w.print();},800);}
   else{alert("Pop-up bloqueado. Permita pop-ups para este site.");}
 }
 
@@ -557,7 +604,7 @@ function openConsolidatedReport(){
   var filtered=getFiltered();
   if(!filtered.length){alert("Nenhuma avaliação para gerar o relatório.");return;}
   var w=window.open("","_blank");
-  if(w){w.document.write(buildConsolidatedReportHTML(filtered,S.cfgReport));w.document.close();setTimeout(function(){w.print();},800);}
+  if(w){w.document.write(buildConsolidatedReportHTML(filtered,getCfgReportEfetivo(filtered)));w.document.close();setTimeout(function(){w.print();},800);}
   else{alert("Pop-up bloqueado. Permita pop-ups para este site.");}
 }
 
@@ -577,7 +624,10 @@ function saveAllConfigs(){
 }
 function saveReportCfgInline(){
   var g=function(id){return(document.getElementById(id)||{}).value||"";};
-  var rep={responsavel:g('rcfg_responsavel'),registro:g('rcfg_registro'),cnpj:g('rcfg_cnpj'),cidade:g('rcfg_cidade'),endereco:g('rcfg_endereco'),telefone:g('rcfg_telefone')};
+  var rep={};
+  for(var k in S.cfgReport)rep[k]=S.cfgReport[k];
+  rep.responsavel=g('rcfg_responsavel');
+  rep.registro=g('rcfg_registro');
   if(!DB){S.cfgReport=rep;var btn=document.getElementById('btn-save-rcfg');if(btn){btn.textContent='✅ Salvo!';setTimeout(function(){btn.textContent='💾 Salvar';},2000);}return;}
   DB.ref("config/report").set(rep).then(function(){S.cfgReport=rep;var btn=document.getElementById('btn-save-rcfg');if(btn){btn.textContent='✅ Salvo!';setTimeout(function(){btn.textContent='💾 Salvar Dados do Responsável';},2500);}});
 }
@@ -1274,12 +1324,24 @@ function screenDetail(){
   h+='</div>';
 
   /* Aba Relatório */
+  var _cfgEf=getCfgReportEfetivo([ev]);
   h+='<div class="dtab-panel'+(S.detailTab==="relatorio"?" active":"")+'">'
     +'<div class="card" style="background:linear-gradient(135deg,rgba(29,78,216,0.08),rgba(59,130,246,0.05));border-color:rgba(59,130,246,0.3)">'
     +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px"><div><h3 style="color:#60a5fa;margin-bottom:4px">📋 Relatório de Avaliação dos Riscos Psicossociais</h3><p style="color:#64748b;font-size:13px;margin:0">Documento conforme NR-1 · Port. MTE 1.419/2024</p></div><button class="btn-g" onclick="openReport()" style="padding:12px 24px;font-size:14px;white-space:nowrap;flex-shrink:0">🖨️ Gerar / Salvar PDF</button></div>'
     +'<div class="info-box" style="margin-bottom:18px"><p style="color:#64748b;font-size:13px;margin:0">💡 No diálogo de impressão, selecione <strong style="color:#1e293b">"Salvar como PDF"</strong>.</p></div>'
-    +'<div style="border-top:1px solid #e2e8f0;padding-top:16px"><h3 style="margin-bottom:4px">👤 Dados do Responsável Técnico</h3><p style="color:#64748b;font-size:13px;margin-bottom:14px">Preencha uma vez — ficam salvos automaticamente.</p>'
-    +'<div class="grid2">'+[{id:'responsavel',lb:'Nome do Responsável',ph:'Ex.: Marco Antonio'},{id:'registro',lb:'Registro Profissional',ph:'Ex.: CREA/SP 5070736194'},{id:'cnpj',lb:'CNPJ da Empresa',ph:'00.000.000/0001-00'},{id:'cidade',lb:'Cidade',ph:'São Paulo'},{id:'endereco',lb:'Endereço',ph:'Rua, nº, CEP'},{id:'telefone',lb:'Telefone',ph:'(11) 99999-9999'}].map(function(f){return'<div><label style="display:block;color:#64748b;font-size:12px;font-weight:500;margin-bottom:5px">'+f.lb+'</label><input id="rcfg_'+f.id+'" class="inp" placeholder="'+f.ph+'" value="'+(S.cfgReport[f.id]||"")+'" style="font-size:13px" oninput="maskDate(this)"/></div>';}).join('')+'</div>'
+    +'<div style="border-top:1px solid #e2e8f0;padding-top:16px;margin-bottom:16px"><h3 style="margin-bottom:8px">📌 Dados que entram neste relatório</h3>'
+    +'<table style="font-size:12.5px"><tbody>'
+      +'<tr><td style="width:38%;font-weight:600;background:#f8fafc;padding:5px 9px;border:1px solid #e2e8f0">CNPJ</td><td style="padding:5px 9px;border:1px solid #e2e8f0">'+escapeHtml(_cfgEf.cnpj||'—')+'</td></tr>'
+      +'<tr><td style="font-weight:600;background:#f8fafc;padding:5px 9px;border:1px solid #e2e8f0">Cidade</td><td style="padding:5px 9px;border:1px solid #e2e8f0">'+escapeHtml(_cfgEf.cidade||'—')+'</td></tr>'
+      +'<tr><td style="font-weight:600;background:#f8fafc;padding:5px 9px;border:1px solid #e2e8f0">Endereço</td><td style="padding:5px 9px;border:1px solid #e2e8f0">'+escapeHtml(_cfgEf.endereco||'—')+'</td></tr>'
+      +'<tr><td style="font-weight:600;background:#f8fafc;padding:5px 9px;border:1px solid #e2e8f0">Telefone</td><td style="padding:5px 9px;border:1px solid #e2e8f0">'+escapeHtml(_cfgEf.telefone||'—')+'</td></tr>'
+      +'<tr><td style="font-weight:600;background:#f8fafc;padding:5px 9px;border:1px solid #e2e8f0">Data usada no relatório</td><td style="padding:5px 9px;border:1px solid #e2e8f0">'+escapeHtml(_cfgEf.dataColetaInicio||'—')+' <span style="color:#94a3b8">(calculada automaticamente a partir desta avaliação)</span></td></tr>'
+    +'</tbody></table>'
+    +(ev.empresaId?'<button class="btn-s" style="margin-top:10px;font-size:12px" onclick="S.screen=\'settings\';S.settingsTab=\'cadastros\';cadSelecionarEmpresa(\''+ev.empresaId+'\')">✏️ Editar CNPJ/cidade/endereço/telefone desta empresa</button>'
+      :'<p style="color:#64748b;font-size:12px;margin-top:8px">Esta avaliação não veio de uma empresa cadastrada em 🏢 Cadastros — os dados acima usam o padrão de reserva de ⚙ Configurações → Geral.</p>')
+    +'</div>'
+    +'<div style="border-top:1px solid #e2e8f0;padding-top:16px"><h3 style="margin-bottom:4px">👤 Responsável Técnico (padrão — vale para todos os relatórios)</h3><p style="color:#64748b;font-size:13px;margin-bottom:14px">Preencha uma vez — ficam salvos automaticamente.</p>'
+    +'<div class="grid2">'+[{id:'responsavel',lb:'Nome do Responsável',ph:'Ex.: Marco Antonio'},{id:'registro',lb:'Registro Profissional',ph:'Ex.: CREA/SP 5070736194'}].map(function(f){return'<div><label style="display:block;color:#64748b;font-size:12px;font-weight:500;margin-bottom:5px">'+f.lb+'</label><input id="rcfg_'+f.id+'" class="inp" placeholder="'+f.ph+'" value="'+(S.cfgReport[f.id]||"")+'" style="font-size:13px"/></div>';}).join('')+'</div>'
     +'<button id="btn-save-rcfg" class="btn-s" onclick="saveReportCfgInline()" style="margin-top:12px;font-size:13px">💾 Salvar Dados do Responsável</button>'
     +'</div></div>'
     +'<div class="card"><h3 style="margin-bottom:14px">Preview — Resultados</h3><table><thead><tr><th>Fator Psicossocial</th><th style="text-align:center">Pontuação</th><th style="text-align:center">Nível</th></tr></thead><tbody>'+results.map(function(r){return'<tr><td>'+r.name+'</td><td class="mono" style="color:'+r.color+';font-weight:700;text-align:center">'+fmtAvg(r.avg)+'</td><td style="text-align:center"><span style="background:'+lBg(r.level)+';color:'+r.color+';font-weight:700;padding:2px 8px;border-radius:4px;font-size:12px;font-family:\'IBM Plex Mono\',monospace">'+r.level+'</span></td></tr>';}).join('')+'</tbody></table></div>'
@@ -1407,7 +1469,23 @@ function toggleEmpresaAtivo(id){
   if(!DB)return;var e=S.catalogo.empresas[id];if(!e)return;
   DB.ref('catalogo/empresas/'+id+'/ativo').set(e.ativo===false,function(){loadCatalogo(function(){render();});});
 }
-function cadSelecionarEmpresa(id){S.cadSelEmpresa=id;S.cadSelSetor='';S.cadNovoSetor='';S.cadNovoCargo='';S.cadMsg='';render();}
+function cadSelecionarEmpresa(id){
+  S.cadSelEmpresa=id;S.cadSelSetor='';S.cadNovoSetor='';S.cadNovoCargo='';S.cadMsg='';S.cadEmpDadosMsg='';
+  var e=S.catalogo.empresas[id]||{};
+  S.cadEmpDados={cnpj:e.cnpj||'',cidade:e.cidade||'',endereco:e.endereco||'',telefone:e.telefone||''};
+  render();
+}
+function saveEmpresaDadosRelatorio(){
+  var id=S.cadSelEmpresa;
+  if(!id)return;
+  if(!DB){S.cadEmpDadosMsg='erro:Sem conexão com Firebase.';render();return;}
+  var d={cnpj:(S.cadEmpDados.cnpj||'').trim(),cidade:(S.cadEmpDados.cidade||'').trim(),endereco:(S.cadEmpDados.endereco||'').trim(),telefone:(S.cadEmpDados.telefone||'').trim()};
+  DB.ref('catalogo/empresas/'+id).update(d,function(err){
+    if(err){S.cadEmpDadosMsg='erro:'+err.message;render();return;}
+    S.cadEmpDadosMsg='ok:Dados salvos para o relatório desta empresa.';
+    loadCatalogo(function(){render();});
+  });
+}
 
 /* ── CRUD: Setores (por empresa) ── */
 function addSetor(){
@@ -1794,10 +1872,11 @@ function screenSettings(){
   var tab=S.settingsTab||"config";
 
   var tabGeral=(tab==="config")
-    ?'<div class="card"><h3>👤 Dados do Responsável Técnico</h3>'
-      +'<p style="color:#64748b;font-size:13px;margin-bottom:16px">Aparecem em todos os relatórios PDF e planilha Excel PGR.</p>'
+    ?'<div class="card"><h3>👤 Dados do Responsável Técnico (padrão)</h3>'
+      +'<p style="color:#64748b;font-size:13px;margin-bottom:16px">Nome/registro e total de elegíveis valem para todos os relatórios. CNPJ, cidade, endereço e telefone aqui são só o <strong style="color:#1e293b">padrão de reserva</strong> — se a empresa estiver cadastrada em 🏢 Cadastros com esses dados preenchidos, o relatório dela usa os dados cadastrados automaticamente, sem precisar mexer aqui.</p>'
+      +'<div class="info-box" style="margin-bottom:16px"><p style="color:#64748b;font-size:13px;margin:0">🗓 O período de coleta (início/fim) não é mais digitado aqui — cada relatório calcula sozinho, a partir da data da primeira e da última avaliação recebida daquele grupo.</p></div>'
       +'<div class="grid2">'
-      +[{id:"responsavel",lb:"Nome Completo",ph:"Ex.: Marco Antonio"},{id:"registro",lb:"Registro Profissional",ph:"CREA/SP 5070736194"},{id:"cnpj",lb:"CNPJ (empresa padrão)",ph:"00.000.000/0001-00"},{id:"cidade",lb:"Cidade",ph:"São Paulo"},{id:"endereco",lb:"Endereço",ph:"Rua, nº, CEP"},{id:"telefone",lb:"Telefone",ph:"(11) 99999-9999"},{id:"dataColetaInicio",lb:"Início da Coleta",ph:"dd/mm/aaaa"},{id:"dataColetaFim",lb:"Fim da Coleta",ph:"dd/mm/aaaa"},{id:"totalElegiveis",lb:"Total de Elegíveis (taxa de resposta)",ph:"26"}]
+      +[{id:"responsavel",lb:"Nome Completo",ph:"Ex.: Marco Antonio"},{id:"registro",lb:"Registro Profissional",ph:"CREA/SP 5070736194"},{id:"cnpj",lb:"CNPJ (padrão de reserva)",ph:"00.000.000/0001-00"},{id:"cidade",lb:"Cidade (padrão de reserva)",ph:"São Paulo"},{id:"endereco",lb:"Endereço (padrão de reserva)",ph:"Rua, nº, CEP"},{id:"telefone",lb:"Telefone (padrão de reserva)",ph:"(11) 99999-9999"},{id:"totalElegiveis",lb:"Total de Elegíveis (taxa de resposta)",ph:"26"}]
         .map(function(f){return'<div><label style="display:block;color:#64748b;font-size:12px;font-weight:500;margin-bottom:5px">'+f.lb+'</label><input id="rcfg_'+f.id+'" class="inp" placeholder="'+f.ph+'" value="'+(r[f.id]||"")+'" style="font-size:13px"/></div>';}).join('')
       +'</div></div>'
       +'<div class="card"><h3>📧 Notificações por E-mail</h3>'
@@ -1941,6 +2020,12 @@ function screenSettings(){
       +'<input id="cadNovaEmpresa" class="inp" placeholder="Nome da nova empresa" style="flex:1;font-size:13px" value="'+escapeHtml(S.cadNovoEmpresa||'')+'" oninput="S.cadNovoEmpresa=this.value"/>'
       +'<button class="btn-p" style="white-space:nowrap" onclick="addEmpresa()">+ Empresa</button>'
       +'</div></div>'
+      +(S.cadSelEmpresa?'<div class="card"><h3>📋 Dados para o relatório de '+escapeHtml(empresaSelNome)+'</h3>'
+        +'<p style="color:#64748b;font-size:13px;margin-bottom:14px">Preenchidos aqui, ficam salvos só para esta empresa e são usados automaticamente em todos os relatórios PDF dela — sem precisar digitar de novo toda vez. O período de coleta (início/fim) agora é sempre calculado sozinho, a partir das respostas realmente recebidas.</p>'
+        +(S.cadEmpDadosMsg?'<div style="margin-bottom:12px;padding:10px 14px;border-radius:6px;font-size:13px;font-weight:500;background:'+(S.cadEmpDadosMsg.indexOf('ok:')===0?'rgba(34,197,94,0.1);color:#16a34a':'rgba(239,68,68,0.08);color:#dc2626')+'">'+escapeHtml(S.cadEmpDadosMsg.replace(/^(ok|erro):/,''))+'</div>':'')
+        +'<div class="grid2">'+[{id:'cnpj',lb:'CNPJ',ph:'00.000.000/0001-00'},{id:'cidade',lb:'Cidade',ph:'São Paulo'},{id:'endereco',lb:'Endereço',ph:'Rua, nº, CEP'},{id:'telefone',lb:'Telefone',ph:'(11) 99999-9999'}].map(function(f){return'<div><label style="display:block;color:#64748b;font-size:12px;font-weight:500;margin-bottom:5px">'+f.lb+'</label><input id="cadEmp_'+f.id+'" class="inp" placeholder="'+f.ph+'" value="'+escapeHtml(S.cadEmpDados[f.id]||'')+'" style="font-size:13px" oninput="S.cadEmpDados.'+f.id+'=this.value"/></div>';}).join('')+'</div>'
+        +'<button class="btn-p" onclick="saveEmpresaDadosRelatorio()" style="margin-top:12px;font-size:13px">💾 Salvar Dados desta Empresa</button>'
+        +'</div>':'')
       +(S.cadSelEmpresa?'<div class="card"><h3>🗂 Setores de '+escapeHtml(empresaSelNome)+'</h3>'
         +(setoresAdm.length?'<div style="margin-bottom:14px">'+setoresAdm.map(function(s){
             return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:'+(S.cadSelSetor===s.id?'#eff6ff':'#f8fafc')+';border:1px solid '+(S.cadSelSetor===s.id?'#93c5fd':'#e2e8f0')+';border-radius:6px;margin-bottom:6px;cursor:pointer" onclick="cadSelecionarSetor(\''+s.id+'\')">'
@@ -1971,7 +2056,7 @@ function screenSettings(){
     +'<div class="panel-topbar no-print"><div class="logo">Psico<span>SST</span></div><div class="panel-nav"><button class="nav-btn" onclick="goPanel()">← Painel</button></div></div>'
     +'<div class="wrap-sm"><span class="tag">Configurações</span>'
     +'<div style="display:flex;gap:6px;margin:12px 0 20px;flex-wrap:wrap">'
-      +'<button class="'+(tab!=="norm"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'config\';render()">⚙ Geral</button>'
+      +'<button class="'+(tab==="config"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'config\';render()">⚙ Geral</button>'
       +'<button class="'+(tab==="norm"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'norm\';S.normSelected=[];S.normMsg=\'\';render()">🔧 Normalizar Dados</button>'+'<button class="'+(tab==="aval"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'aval\';S.avalMsg=\'\';loadAvaliadores(function(){render();});" >👥 Avaliadores</button>'
       +(isAdmin()?'<button class="'+(tab==="cadastros"?"btn-p":"btn-s")+'" onclick="S.settingsTab=\'cadastros\';S.cadMsg=\'\';loadCatalogo(function(){render();});" >🏢 Cadastros</button>':'')
     +'</div>'
